@@ -17,19 +17,25 @@ public class InboundMessage {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false)
+    @Column(nullable = false, length = 100)
     private String platformMessageId;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
+    @Column(nullable = false, length = 20)
     private Platform platform;
 
-    @Column(nullable = false)
+    @Column(nullable = false, length = 255)
     private String userId;          // email (sub) из JWT
 
+    @Column(length = 50)
     private String senderId;
+
+    @Column(length = 500)
     private String senderName;
+
+    @Column(columnDefinition = "TEXT")
     private String text;
+
     private Instant timestamp;
 
     @CreationTimestamp
