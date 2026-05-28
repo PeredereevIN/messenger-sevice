@@ -19,7 +19,7 @@ import java.util.stream.Collectors;
 @Service
 @Slf4j
 public class MessageService {
-    private final Map<String, IMessengerClient> clients;   // ключ – имя бина (vk, whatsapp...)
+    private final Map<String, IMessengerClient> clients;
     private final InboundMessageRepository messageRepository;
     private final UserMessengerConnectionRepository connectionRepository;
 
@@ -39,8 +39,9 @@ public class MessageService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Пользователь не подключил платформу " + platform));
 
-        List<MessageDto> dtos = client.getConversations(conn.getPlatformUserId(), count);
-        // Сохраняем в БД
+        // Теперь передаём токен из подключения
+        List<MessageDto> dtos = client.getConversations(conn.getPlatformUserId(), count, conn.getAccessToken());
+
         List<InboundMessage> entities = dtos.stream()
                 .map(dto -> InboundMessage.builder()
                         .platformMessageId(dto.getPlatformMessageId())
@@ -65,9 +66,7 @@ public class MessageService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Пользователь не подключил платформу " + platform));
 
-        List<MessageDto> dtos = client.getMessages(conn.getPlatformUserId(), conversationId, count);
-        // Сохраняем в БД (опционально, или просто возвращаем)
-        return dtos;
+        return client.getMessages(conn.getPlatformUserId(), conversationId, count, conn.getAccessToken());
     }
 
     public void addConnection(String userId, Platform platform, String platformUserId, String accessToken) {
@@ -81,7 +80,7 @@ public class MessageService {
     }
 
     private IMessengerClient getClient(Platform platform) {
-        String beanName = platform.name().toLowerCase();   // "vk", "whatsapp"
+        String beanName = platform.name().toLowerCase();
         IMessengerClient client = clients.get(beanName);
         if (client == null) {
             throw new IllegalArgumentException("Нет клиента для платформы: " + platform);

@@ -19,14 +19,13 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-
-@Service("vk")
 @Slf4j
+@Service("vk")
 public class VkApiClientImpl implements IMessengerClient {
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
-    private final String accessToken;
+    private final String defaultAccessToken;
     private final String version;
     private final String baseUrl;
 
@@ -53,67 +52,42 @@ public class VkApiClientImpl implements IMessengerClient {
     }
 
     public VkApiClientImpl(@Value("${vk.api.base-url}") String baseUrl,
-                           @Value("${vk.api.access-token}") String accessToken,
+                           @Value("${vk.api.access-token}") String defaultAccessToken,
                            @Value("${vk.api.version}") String version) {
         this.restTemplate = new RestTemplate(new SimpleClientHttpRequestFactory());
         this.objectMapper = new ObjectMapper();
         this.baseUrl = baseUrl;
-        this.accessToken = accessToken;
+        this.defaultAccessToken = defaultAccessToken;
         this.version = version;
     }
 
 
     @Override
-    public List<MessageDto> getConversations(String platformUserId, int count) {
+    public List<MessageDto> getConversations(String platformUserId, int count, String accessToken) {
+        String token = resolveToken(accessToken);
         String url = String.format(
                 "%s/messages.getConversations?access_token=%s&v=%s&count=%d",
-                baseUrl, accessToken, version, count);
+                baseUrl, token, version, count);
         log.info("Requesting VK conversations: {}", url);
-
-        try {
-            ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
-            if (!response.getStatusCode().is2xxSuccessful()) {
-                log.error("VK API returned status: {}", response.getStatusCode());
-                return Collections.emptyList();
-            }
-
-            JsonNode root = objectMapper.readTree(response.getBody());
-
-            if (root.has("error")) {
-                JsonNode error = root.get("error");
-                log.error("VK API error: code={}, message={}",
-                        error.get("error_code").asText(),
-                        error.get("error_msg").asText());
-                return Collections.emptyList();
-            }
-
-            List<MessageDto> messages = new ArrayList<>();
-            JsonNode items = root.path("response").path("items");
-            for (JsonNode item : items) {
-                JsonNode lastMessage = item.path("last_message");
-                if (!lastMessage.isMissingNode()) {
-                    MessageDto msg = parseMessage(lastMessage);
-                    messages.add(msg);
-                }
-            }
-            return messages;
-
-        } catch (HttpClientErrorException e) {
-            log.error("VK API client error: {} {}", e.getStatusCode(), e.getResponseBodyAsString());
-            return Collections.emptyList();
-        } catch (Exception e) {
-            log.error("Unexpected error when calling VK API", e);
-            return Collections.emptyList();
-        }
+        return executeVkRequest(url, null);
     }
 
     @Override
-    public List<MessageDto> getMessages(String platformUserId, String conversationId, int count) {
+    public List<MessageDto> getMessages(String platformUserId, String conversationId, int count, String accessToken) {
+        String token = resolveToken(accessToken);
         String url = String.format(
                 "%s/messages.getHistory?access_token=%s&v=%s&peer_id=%s&count=%d",
-                baseUrl, accessToken, version, conversationId, count);
+                baseUrl, token, version, conversationId, count);
         log.info("Requesting VK messages: {}", url);
+        return executeVkRequest(url, conversationId);
+    }
 
+    private String resolveToken(String providedToken) {
+        // Если передан непустой токен, используем его, иначе пробуем default из конфига
+        return (providedToken != null && !providedToken.isBlank()) ? providedToken : defaultAccessToken;
+    }
+
+    private List<MessageDto> executeVkRequest(String url, String conversationId) {
         try {
             ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
             if (!response.getStatusCode().is2xxSuccessful()) {
@@ -122,7 +96,6 @@ public class VkApiClientImpl implements IMessengerClient {
             }
 
             JsonNode root = objectMapper.readTree(response.getBody());
-
             if (root.has("error")) {
                 JsonNode error = root.get("error");
                 log.error("VK API error: code={}, message={}",
@@ -135,7 +108,9 @@ public class VkApiClientImpl implements IMessengerClient {
             JsonNode items = root.path("response").path("items");
             for (JsonNode item : items) {
                 MessageDto msg = parseMessage(item);
-                msg.setConversationId(conversationId);   // дополняем ID беседы
+                if (conversationId != null) {
+                    msg.setConversationId(conversationId);
+                }
                 messages.add(msg);
             }
             return messages;
@@ -151,11 +126,9 @@ public class VkApiClientImpl implements IMessengerClient {
 
     private MessageDto parseMessage(JsonNode messageNode) {
         long fromId = messageNode.get("from_id").asLong();
-        long conversationId = messageNode.has("peer_id") ?
-                messageNode.get("peer_id").asLong() : 0;
         return MessageDto.builder()
                 .platformMessageId(String.valueOf(messageNode.get("id").asLong()))
-                .conversationId(String.valueOf(conversationId))
+                .conversationId(messageNode.has("peer_id") ? String.valueOf(messageNode.get("peer_id").asLong()) : "0")
                 .senderId(String.valueOf(fromId))
                 .senderName(getSenderName(fromId))
                 .text(messageNode.path("text").asText(""))
@@ -163,25 +136,22 @@ public class VkApiClientImpl implements IMessengerClient {
                 .build();
     }
 
-    // Новый универсальный метод для получения имени отправителя
     private String getSenderName(long senderId) {
         if (senderId > 0) {
-            return getUserName(senderId); // Для обычных пользователей
+            return getUserName(senderId);
         } else {
-            return getGroupName(-senderId); // Для сообществ
+            return getGroupName(-senderId);
         }
     }
 
-    // Получение имени пользователя (без изменений, только добавили проверку)
     private String getUserName(long userId) {
         String url = String.format(
                 "%s/users.get?user_ids=%d&access_token=%s&v=%s",
-                baseUrl, userId, accessToken, version);
+                baseUrl, defaultAccessToken, version, userId);
         try {
             ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
             JsonNode root = objectMapper.readTree(response.getBody());
             JsonNode userNode = root.path("response").get(0);
-            // Проверяем, найден ли пользователь
             if (userNode != null && !userNode.isMissingNode()) {
                 return userNode.get("first_name").asText() + " " + userNode.get("last_name").asText();
             }
@@ -191,11 +161,10 @@ public class VkApiClientImpl implements IMessengerClient {
         return "Unknown User";
     }
 
-    // Новый метод для получения названия сообщества
     private String getGroupName(long groupId) {
         String url = String.format(
                 "%s/groups.getById?group_id=%d&access_token=%s&v=%s",
-                baseUrl, groupId, accessToken, version);
+                baseUrl, defaultAccessToken, version, groupId);
         try {
             ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
             JsonNode root = objectMapper.readTree(response.getBody());
