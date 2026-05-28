@@ -7,7 +7,7 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.List;
 
-// @Service("whatsapp")
+@Service("whatsapp")
 @Slf4j
 public class WhatsAppApiClientStub implements IMessengerClient{
     @Override
