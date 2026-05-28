@@ -1,6 +1,6 @@
-package com.peredereevin.aggregator.service;
+package com.peredereevin.messengerservice.service;
 
-import com.peredereevin.aggregator.dto.MessageDto;
+import com.peredereevin.messengerservice.dto.MessageDto;
 import java.util.List;
 
 public interface IMessengerClient {

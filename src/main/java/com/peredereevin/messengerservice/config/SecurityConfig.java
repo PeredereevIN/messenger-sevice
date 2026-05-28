@@ -1,4 +1,4 @@
-package com.peredereevin.aggregator.config;
+package com.peredereevin.messengerservice.config;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

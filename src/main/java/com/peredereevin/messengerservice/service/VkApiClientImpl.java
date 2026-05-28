@@ -1,7 +1,6 @@
-package com.peredereevin.aggregator.service;
+package com.peredereevin.messengerservice.service;
 
-
-import com.peredereevin.aggregator.dto.MessageDto;
+import com.peredereevin.messengerservice.dto.MessageDto;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;

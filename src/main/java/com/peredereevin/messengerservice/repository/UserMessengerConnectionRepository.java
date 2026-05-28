@@ -1,7 +1,7 @@
-package com.peredereevin.aggregator.repository;
+package com.peredereevin.messengerservice.repository;
 
-import com.peredereevin.aggregator.domain.Platform;
-import com.peredereevin.aggregator.domain.UserMessengerConnection;
+import com.peredereevin.messengerservice.domain.Platform;
+import com.peredereevin.messengerservice.domain.UserMessengerConnection;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.Optional;

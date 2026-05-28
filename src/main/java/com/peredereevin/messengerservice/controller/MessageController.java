@@ -1,8 +1,8 @@
-package com.peredereevin.aggregator.controller;
+package com.peredereevin.messengerservice.controller;
 
-import com.peredereevin.aggregator.domain.Platform;
-import com.peredereevin.aggregator.dto.MessageDto;
-import com.peredereevin.aggregator.service.MessageService;
+import com.peredereevin.messengerservice.domain.Platform;
+import com.peredereevin.messengerservice.dto.MessageDto;
+import com.peredereevin.messengerservice.service.MessageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;

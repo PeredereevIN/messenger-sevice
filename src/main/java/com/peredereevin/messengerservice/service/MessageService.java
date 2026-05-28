@@ -1,17 +1,16 @@
-package com.peredereevin.aggregator.service;
+package com.peredereevin.messengerservice.service;
 
-import com.peredereevin.aggregator.domain.InboundMessage;
-import com.peredereevin.aggregator.domain.Platform;
-import com.peredereevin.aggregator.domain.UserMessengerConnection;
-import com.peredereevin.aggregator.dto.MessageDto;
-import com.peredereevin.aggregator.repository.InboundMessageRepository;
-import com.peredereevin.aggregator.repository.UserMessengerConnectionRepository;
+import com.peredereevin.messengerservice.domain.InboundMessage;
+import com.peredereevin.messengerservice.domain.Platform;
+import com.peredereevin.messengerservice.domain.UserMessengerConnection;
+import com.peredereevin.messengerservice.dto.MessageDto;
+import com.peredereevin.messengerservice.repository.InboundMessageRepository;
+import com.peredereevin.messengerservice.repository.UserMessengerConnectionRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;

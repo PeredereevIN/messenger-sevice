@@ -1,4 +1,4 @@
-package com.peredereevin.aggregator.dto;
+package com.peredereevin.messengerservice.dto;
 
 import lombok.Builder;
 import lombok.Data;

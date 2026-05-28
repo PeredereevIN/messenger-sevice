@@ -1,4 +1,4 @@
-package com.peredereevin.aggregator.domain;
+package com.peredereevin.messengerservice.domain;
 
 public enum Platform {
     VK, DION, EXPRESS, WHATSAPP
