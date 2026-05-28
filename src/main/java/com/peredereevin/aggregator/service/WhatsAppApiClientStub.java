@@ -42,4 +42,9 @@ public class WhatsAppApiClientStub implements IMessengerClient {
         );
     }
 
+    @Override
+    public String sendMessage(String platformUserId, String recipientId, String text, String accessToken) {
+        log.info("WhatsApp stub: pretending to send message to {}: {}", recipientId, text);
+        return "wa_fake_msg_" + System.currentTimeMillis();
+    }
 }

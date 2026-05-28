@@ -87,4 +87,13 @@ public class MessageService {
         }
         return client;
     }
+
+    public String sendMessage(String userId, Platform platform, String recipientId, String text) {
+        IMessengerClient client = getClient(platform);
+        UserMessengerConnection conn = connectionRepository
+                .findByUserIdAndPlatform(userId, platform)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Пользователь не подключил платформу " + platform));
+        return client.sendMessage(conn.getPlatformUserId(), recipientId, text, conn.getAccessToken());
+    }
 }

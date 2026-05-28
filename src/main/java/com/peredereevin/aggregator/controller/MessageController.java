@@ -57,4 +57,28 @@ public class MessageController {
         messageService.addConnection(userId, platform, platformUserId, accessToken);
         return ResponseEntity.ok(Map.of("message", "Подключение успешно добавлено"));
     }
+
+    @PostMapping("/send")
+    public ResponseEntity<?> sendMessage(@AuthenticationPrincipal Jwt jwt,
+                                         @RequestBody Map<String, String> body) {
+        String userId = jwt.getSubject();
+        Platform platform = Platform.valueOf(body.get("platform").toUpperCase());
+        String recipientId = body.get("recipientId");
+        String text = body.get("text");
+
+        if (text == null || text.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Текст сообщения не может быть пустым"));
+        }
+
+
+
+        try {
+            String result = messageService.sendMessage(userId, platform, recipientId, text);
+            return ResponseEntity.ok(Map.of("messageId", result));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body(Map.of("error", "Internal error"));
+        }
+    }
 }

@@ -9,10 +9,16 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import javax.net.ssl.*;
+import java.io.IOException;
+import java.net.Proxy;
+import java.net.ProxySelector;
+import java.net.SocketAddress;
+import java.net.URI;
 import java.security.cert.X509Certificate;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -35,6 +41,7 @@ public class VkApiClientImpl implements IMessengerClient {
 
     static {
         disableSslVerification();
+        disableSystemProxies();
     }
 
     private static void disableSslVerification() {
@@ -55,9 +62,41 @@ public class VkApiClientImpl implements IMessengerClient {
         }
     }
 
+    private static void disableSystemProxies() {
+        // Принудительно отключаем использование системных прокси
+        System.setProperty("java.net.useSystemProxies", "false");
+
+        // Удаляем системные свойства прокси, если они заданы
+        System.clearProperty("http.proxyHost");
+        System.clearProperty("http.proxyPort");
+        System.clearProperty("https.proxyHost");
+        System.clearProperty("https.proxyPort");
+        System.clearProperty("http.nonProxyHosts");
+        System.clearProperty("socksProxyHost");
+        System.clearProperty("socksProxyPort");
+
+        // Устанавливаем дефолтный ProxySelector, который всегда возвращает NO_PROXY
+        ProxySelector.setDefault(new ProxySelector() {
+            @Override
+            public List<Proxy> select(URI uri) {
+                return Collections.singletonList(Proxy.NO_PROXY);
+            }
+
+            @Override
+            public void connectFailed(URI uri, SocketAddress sa, IOException ioe) {
+                // ignore
+            }
+        });
+    }
+
     public VkApiClientImpl(@Value("${vk.api.base-url}") String baseUrl,
                            @Value("${vk.api.access-token}") String defaultAccessToken,
                            @Value("${vk.api.version}") String version) {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setProxy(java.net.Proxy.NO_PROXY);   // отключаем системный прокси
+        factory.setConnectTimeout(java.time.Duration.ofSeconds(5));
+        factory.setReadTimeout(java.time.Duration.ofSeconds(10));
+
         this.restTemplate = new RestTemplate(new SimpleClientHttpRequestFactory());
         this.objectMapper = new ObjectMapper();
         this.baseUrl = baseUrl;
@@ -83,6 +122,47 @@ public class VkApiClientImpl implements IMessengerClient {
                 baseUrl, token, version, conversationId, count);
         log.info("Requesting VK messages: {}", url);
         return executeMessagesRequest(url, conversationId, token);
+    }
+
+    @Override
+    public String sendMessage(String platformUserId, String recipientId, String text, String accessToken) {
+        String token = resolveToken(accessToken);
+        // Проверяем, что recipientId передан
+        if (recipientId == null || recipientId.isBlank()) {
+            log.error("recipientId is null or empty");
+            return "Error: recipientId is required";
+        }
+        try {
+            String url = baseUrl + "/messages.send";
+            UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(url)
+                    .queryParam("access_token", token)
+                    .queryParam("v", version)
+                    .queryParam("message", text)
+                    .queryParam("random_id", System.currentTimeMillis());
+
+            // Определяем, какой параметр использовать: user_id или peer_id
+            // Если ID начинается с минуса или содержит более 9 цифр — это peer_id
+            if (recipientId.startsWith("-") || recipientId.length() > 9) {
+                builder.queryParam("peer_id", recipientId);
+            } else {
+                builder.queryParam("user_id", recipientId);
+            }
+
+            URI uri = builder.build().encode().toUri();
+            log.info("Sending VK message: {}", uri);
+
+            ResponseEntity<String> response = restTemplate.getForEntity(uri, String.class);
+            JsonNode root = objectMapper.readTree(response.getBody());
+            if (root.has("error")) {
+                JsonNode error = root.get("error");
+                log.error("VK send error: {}", error);
+                return "Error: " + error.get("error_msg").asText();
+            }
+            return root.path("response").asText(); // ID сообщения
+        } catch (Exception e) {
+            log.error("Failed to send VK message", e);
+            return "Error: " + e.getMessage();
+        }
     }
 
     private String resolveToken(String providedToken) {
