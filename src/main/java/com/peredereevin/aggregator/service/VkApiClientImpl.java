@@ -20,8 +20,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-@Slf4j
+
 @Service("vk")
+@Slf4j
 public class VkApiClientImpl implements IMessengerClient {
 
     private final RestTemplate restTemplate;
