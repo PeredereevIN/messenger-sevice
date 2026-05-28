@@ -2,9 +2,10 @@ package com.peredereevin.aggregator.service;
 
 import com.peredereevin.aggregator.domain.InboundMessage;
 import com.peredereevin.aggregator.domain.Platform;
-import com.peredereevin.aggregator.io.VkMessage;
+import com.peredereevin.aggregator.dto.MessageDto;
 import com.peredereevin.aggregator.repository.InboundMessageRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -14,25 +15,37 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class MessageService {
-    private final VkApiClient vkApiClient;   // здесь заглушка
-    private final InboundMessageRepository repository;
+    private final IMessengerClient vkClient;   // будет внедрён VkApiClientImpl, т.к. это единственная реализация IMessengerClient
+    private final InboundMessageRepository messageRepository;
 
     @Transactional
-    public List<InboundMessage> fetchAndSaveVkMessages(String userId, int count) {
-        List<VkMessage> vkMessages = vkApiClient.getConversations(userId, count);
-        List<InboundMessage> entities = vkMessages.stream()
-                .map(vk -> InboundMessage.builder()
-                        .platformMessageId(vk.getId())
-                        .platform(Platform.VK)
-                        .userId(userId)
-                        .senderId(vk.getFromId())
-                        .senderName(vk.getFromName())
-                        .text(vk.getText())
-                        .timestamp(vk.getDate())
+    public List<MessageDto> getConversations(String platformUserId, int count) {
+        List<MessageDto> dtos = vkClient.getConversations(platformUserId, count);
+        // сохраняем в БД
+        List<InboundMessage> entities = dtos.stream()
+                .map(dto -> InboundMessage.builder()
+                        .platformMessageId(dto.getPlatformMessageId())
+                        .platform(determinePlatform(dto))   // нужен метод определения платформы, пока захардкодим VK
+                        .userId(platformUserId)             // пока platformUserId – это email из JWT, временно
+                        .senderId(dto.getSenderId())
+                        .senderName(dto.getSenderName())
+                        .text(dto.getText())
+                        .timestamp(dto.getTimestamp())
                         .fetchedAt(Instant.now())
                         .build())
                 .collect(Collectors.toList());
-        return repository.saveAll(entities);
+        messageRepository.saveAll(entities);
+        return dtos;
+    }
+
+    public List<MessageDto> getMessages(String platformUserId, String conversationId, int count) {
+        return vkClient.getMessages(platformUserId, conversationId, count);
+    }
+
+    private Platform determinePlatform(MessageDto dto) {
+        // Заглушка: всегда VK, т.к. мы знаем, что сейчас только VK
+        return Platform.VK;
     }
 }
