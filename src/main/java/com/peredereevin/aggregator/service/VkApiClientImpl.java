@@ -18,6 +18,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Service("vk")
@@ -28,6 +30,8 @@ public class VkApiClientImpl implements IMessengerClient {
     private final String defaultAccessToken;
     private final String version;
     private final String baseUrl;
+
+    private final Map<Long, String> nameCache = new ConcurrentHashMap<>();
 
     static {
         disableSslVerification();
@@ -61,7 +65,6 @@ public class VkApiClientImpl implements IMessengerClient {
         this.version = version;
     }
 
-
     @Override
     public List<MessageDto> getConversations(String platformUserId, int count, String accessToken) {
         String token = resolveToken(accessToken);
@@ -69,7 +72,7 @@ public class VkApiClientImpl implements IMessengerClient {
                 "%s/messages.getConversations?access_token=%s&v=%s&count=%d",
                 baseUrl, token, version, count);
         log.info("Requesting VK conversations: {}", url);
-        return executeVkRequest(url, null);
+        return executeConversationsRequest(url, token);
     }
 
     @Override
@@ -79,15 +82,49 @@ public class VkApiClientImpl implements IMessengerClient {
                 "%s/messages.getHistory?access_token=%s&v=%s&peer_id=%s&count=%d",
                 baseUrl, token, version, conversationId, count);
         log.info("Requesting VK messages: {}", url);
-        return executeVkRequest(url, conversationId);
+        return executeMessagesRequest(url, conversationId, token);
     }
 
     private String resolveToken(String providedToken) {
-        // Если передан непустой токен, используем его, иначе пробуем default из конфига
         return (providedToken != null && !providedToken.isBlank()) ? providedToken : defaultAccessToken;
     }
 
-    private List<MessageDto> executeVkRequest(String url, String conversationId) {
+    private List<MessageDto> executeConversationsRequest(String url, String accessToken) {
+        try {
+            ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
+            if (!response.getStatusCode().is2xxSuccessful()) {log.error("VK API returned status: {}", response.getStatusCode());
+                return Collections.emptyList();
+            }
+
+            JsonNode root = objectMapper.readTree(response.getBody());
+            if (root.has("error")) {
+                JsonNode error = root.get("error");
+                log.error("VK API error: code={}, message={}",
+                        error.get("error_code").asText(),
+                        error.get("error_msg").asText());
+                return Collections.emptyList();
+            }
+
+            List<MessageDto> messages = new ArrayList<>();
+            JsonNode items = root.path("response").path("items");
+            for (JsonNode item : items) {
+                JsonNode lastMessage = item.path("last_message");
+                if (!lastMessage.isMissingNode()) {
+                    MessageDto msg = parseMessage(lastMessage, accessToken);
+                    messages.add(msg);
+                }
+            }
+            return messages;
+        } catch (HttpClientErrorException e) {
+            log.error("VK API client error: {} {}", e.getStatusCode(), e.getResponseBodyAsString());
+            return Collections.emptyList();
+        } catch (Exception e) {
+            log.error("Unexpected error when calling VK API", e);
+            return Collections.emptyList();
+        }
+    }
+
+    private List<MessageDto> executeMessagesRequest(String url, String conversationId, String accessToken) {
         try {
             ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
             if (!response.getStatusCode().is2xxSuccessful()) {
@@ -107,14 +144,11 @@ public class VkApiClientImpl implements IMessengerClient {
             List<MessageDto> messages = new ArrayList<>();
             JsonNode items = root.path("response").path("items");
             for (JsonNode item : items) {
-                MessageDto msg = parseMessage(item);
-                if (conversationId != null) {
-                    msg.setConversationId(conversationId);
-                }
+                MessageDto msg = parseMessage(item, accessToken);
+                msg.setConversationId(conversationId);
                 messages.add(msg);
             }
             return messages;
-
         } catch (HttpClientErrorException e) {
             log.error("VK API client error: {} {}", e.getStatusCode(), e.getResponseBodyAsString());
             return Collections.emptyList();
@@ -124,57 +158,85 @@ public class VkApiClientImpl implements IMessengerClient {
         }
     }
 
-    private MessageDto parseMessage(JsonNode messageNode) {
-        long fromId = messageNode.get("from_id").asLong();
+    private MessageDto parseMessage(JsonNode messageNode, String accessToken) {
+        // Безопасное извлечение id
+        JsonNode idNode = messageNode.get("id");
+        String messageId = idNode != null ? String.valueOf(idNode.asLong()) : "0";
+
+        // Безопасное извлечение from_id
+        JsonNode fromIdNode = messageNode.get("from_id");
+        long fromId = fromIdNode != null ? fromIdNode.asLong() : 0L;
+
+        // Безопасное извлечение peer_id
+        JsonNode peerNode = messageNode.get("peer_id");
+        String conversationId = peerNode != null ? String.valueOf(peerNode.asLong()) : "0";
+
+        // Текст может отсутствовать
+        String text = messageNode.has("text") ? messageNode.get("text").asText("") : "";
+
+        // Дата
+        long timestamp = messageNode.has("date") ? messageNode.get("date").asLong() : Instant.now().getEpochSecond();
+
+        // Имя отправителя
+        String senderName = getSenderName(fromId, accessToken);
+
         return MessageDto.builder()
-                .platformMessageId(String.valueOf(messageNode.get("id").asLong()))
-                .conversationId(messageNode.has("peer_id") ? String.valueOf(messageNode.get("peer_id").asLong()) : "0")
-                .senderId(String.valueOf(fromId))
-                .senderName(getSenderName(fromId))
-                .text(messageNode.path("text").asText(""))
-                .timestamp(Instant.ofEpochSecond(messageNode.get("date").asLong()))
+                .platformMessageId(messageId)
+                .conversationId(conversationId).senderId(String.valueOf(fromId))
+                .senderName(senderName)
+                .text(text)
+                .timestamp(Instant.ofEpochSecond(timestamp))
                 .build();
     }
 
-    private String getSenderName(long senderId) {
+    private String getSenderName(long senderId, String accessToken) {
         if (senderId > 0) {
-            return getUserName(senderId);
-        } else {
-            return getGroupName(-senderId);
+            return getUserName(senderId, accessToken);
+        } else if (senderId < 0) {
+            return getGroupName(-senderId, accessToken);
         }
+        return "Unknown";
     }
 
-    private String getUserName(long userId) {
-        String url = String.format(
-                "%s/users.get?user_ids=%d&access_token=%s&v=%s",
-                baseUrl, defaultAccessToken, version, userId);
-        try {
-            ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
-            JsonNode root = objectMapper.readTree(response.getBody());
-            JsonNode userNode = root.path("response").get(0);
-            if (userNode != null && !userNode.isMissingNode()) {
-                return userNode.get("first_name").asText() + " " + userNode.get("last_name").asText();
+    private String getUserName(long userId, String accessToken) {
+        if (userId == 0) return "Unknown User";
+        return nameCache.computeIfAbsent(userId, id -> {
+            String url = String.format(
+                    "%s/users.get?user_ids=%d&access_token=%s&v=%s",
+                    baseUrl, id, accessToken, version);
+            try {
+                ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
+                JsonNode root = objectMapper.readTree(response.getBody());
+                JsonNode userNode = root.path("response").get(0);
+                if (userNode != null && !userNode.isMissingNode()) {
+                    String firstName = userNode.path("first_name").asText("");
+                    String lastName = userNode.path("last_name").asText("");
+                    return (firstName + " " + lastName).trim();
+                }
+            } catch (Exception e) {
+                log.error("Error fetching user name for id={}", id, e);
             }
-        } catch (Exception e) {
-            log.error("Error fetching user name for id={}", userId, e);
-        }
-        return "Unknown User";
+            return "Unknown User";
+        });
     }
 
-    private String getGroupName(long groupId) {
-        String url = String.format(
-                "%s/groups.getById?group_id=%d&access_token=%s&v=%s",
-                baseUrl, defaultAccessToken, version, groupId);
-        try {
-            ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
-            JsonNode root = objectMapper.readTree(response.getBody());
-            JsonNode groupNode = root.path("response").get(0);
-            if (groupNode != null && !groupNode.isMissingNode()) {
-                return groupNode.get("name").asText();
+    private String getGroupName(long groupId, String accessToken) {
+        if (groupId == 0) return "Unknown Group";
+        return nameCache.computeIfAbsent(-groupId, id -> {
+            String url = String.format(
+                    "%s/groups.getById?group_id=%d&access_token=%s&v=%s",
+                    baseUrl, -id, accessToken, version);
+            try {
+                ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
+                JsonNode root = objectMapper.readTree(response.getBody());
+                JsonNode groupNode = root.path("response").get(0);
+                if (groupNode != null && !groupNode.isMissingNode()) {
+                    return groupNode.path("name").asText("Unknown Group");
+                }
+            } catch (Exception e) {
+                log.error("Error fetching group name for id={}", -id, e);
             }
-        } catch (Exception e) {
-            log.error("Error fetching group name for id={}", groupId, e);
-        }
-        return "Unknown Group";
+            return "Unknown Group";
+        });
     }
 }
