@@ -1,0 +1,33 @@
+server:
+  port: 8081
+  servlet:
+    context-path: /api
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/message_aggregator
+    username: postgres
+    password: postgres
+  jpa:
+    hibernate:
+      ddl-auto: update
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # Адрес auth-сервиса для получения публичного ключа (JWKS)
+          jwk-set-uri: http://localhost:8080/api/v1/.well-known/jwks.json
+          # issuer-uri: http://auth-service:8080/api/v1
+
+encryption:
+  secret-key: ${ENCRYPTION_SECRET_KEY:lLI7zH3ymnd7Kilb827ECjdLyHnyq9y/tWOEqO/kh4k=}
+
+vk:
+  api:
+    base-url: https://api.vk.com/method
+    access-token: vk1.a.zaY5IuTQ1SPSS4zNjau5IO6p3xt2lY7-dy6z1DneYng0MQreNmc6Sh2_hj5dlQSlw9-8EZ3F1U1AFOhtdB5Zc-lfhMW13BMztknHGzeIhOSIdLpD1mWzaYi-wvb3Pkt_5Pqp3y8JP4kHkHQTlhNIMXmdo61xEgDvhzbLGyU7Q5L68AcNr0Vru9CQIvTfpEeRYiMoQ3gw5eu0YM1tCyYMGg
+    version: "5.131"
+
+logging:
+  level:
+    org.springframework.security.oauth2: DEBUG
