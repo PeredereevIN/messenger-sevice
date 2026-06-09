@@ -21,13 +21,16 @@ public class MessageService {
     private final Map<String, IMessengerClient> clients;
     private final InboundMessageRepository messageRepository;
     private final UserMessengerConnectionRepository connectionRepository;
+    private final EncryptionService encryptionService;   // новое поле
 
     public MessageService(Map<String, IMessengerClient> clients,
                           InboundMessageRepository messageRepository,
-                          UserMessengerConnectionRepository connectionRepository) {
+                          UserMessengerConnectionRepository connectionRepository,
+                          EncryptionService encryptionService) {
         this.clients = clients;
         this.messageRepository = messageRepository;
         this.connectionRepository = connectionRepository;
+        this.encryptionService = encryptionService;
     }
 
     @Transactional
@@ -38,8 +41,9 @@ public class MessageService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Пользователь не подключил платформу " + platform));
 
-        // Теперь передаём токен из подключения
-        List<MessageDto> dtos = client.getConversations(conn.getPlatformUserId(), count, conn.getAccessToken());
+        String accessToken = encryptionService.decrypt(conn.getAccessToken());   // расшифровываем
+
+        List<MessageDto> dtos = client.getConversations(conn.getPlatformUserId(), count, accessToken);
 
         List<InboundMessage> entities = dtos.stream()
                 .map(dto -> InboundMessage.builder()
@@ -65,17 +69,32 @@ public class MessageService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Пользователь не подключил платформу " + platform));
 
-        return client.getMessages(conn.getPlatformUserId(), conversationId, count, conn.getAccessToken());
+        String accessToken = encryptionService.decrypt(conn.getAccessToken());   // расшифровываем
+
+        return client.getMessages(conn.getPlatformUserId(), conversationId, count, accessToken);
     }
 
     public void addConnection(String userId, Platform platform, String platformUserId, String accessToken) {
+        String encryptedToken = encryptionService.encrypt(accessToken);   // шифруем перед сохранением
         UserMessengerConnection conn = UserMessengerConnection.builder()
                 .userId(userId)
                 .platform(platform)
                 .platformUserId(platformUserId)
-                .accessToken(accessToken)
+                .accessToken(encryptedToken)
                 .build();
         connectionRepository.save(conn);
+    }
+
+    public String sendMessage(String userId, Platform platform, String recipientId, String text) {
+        IMessengerClient client = getClient(platform);
+        UserMessengerConnection conn = connectionRepository
+                .findByUserIdAndPlatform(userId, platform)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Пользователь не подключил платформу " + platform));
+
+        String accessToken = encryptionService.decrypt(conn.getAccessToken());   // расшифровываем
+
+        return client.sendMessage(conn.getPlatformUserId(), recipientId, text, accessToken);
     }
 
     private IMessengerClient getClient(Platform platform) {
@@ -85,14 +104,5 @@ public class MessageService {
             throw new IllegalArgumentException("Нет клиента для платформы: " + platform);
         }
         return client;
-    }
-
-    public String sendMessage(String userId, Platform platform, String recipientId, String text) {
-        IMessengerClient client = getClient(platform);
-        UserMessengerConnection conn = connectionRepository
-                .findByUserIdAndPlatform(userId, platform)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Пользователь не подключил платформу " + platform));
-        return client.sendMessage(conn.getPlatformUserId(), recipientId, text, conn.getAccessToken());
     }
 }

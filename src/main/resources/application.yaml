@@ -19,6 +19,9 @@ spring:
           jwk-set-uri: http://localhost:8080/api/v1/.well-known/jwks.json
           # issuer-uri: http://auth-service:8080/api/v1
 
+encryption:
+  secret-key: ${ENCRYPTION_SECRET_KEY:lLI7zH3ymnd7Kilb827ECjdLyHnyq9y/tWOEqO/kh4k=}
+
 vk:
   api:
     base-url: https://api.vk.com/method
