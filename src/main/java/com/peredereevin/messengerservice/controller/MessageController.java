@@ -2,8 +2,11 @@ package com.peredereevin.messengerservice.controller;
 
 import com.peredereevin.messengerservice.domain.Platform;
 import com.peredereevin.messengerservice.dto.MessageDto;
+import com.peredereevin.messengerservice.exception.InvalidTokenException;
+import com.peredereevin.messengerservice.exception.TooManyRequestsException;
 import com.peredereevin.messengerservice.service.MessageService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -70,15 +73,11 @@ public class MessageController {
             return ResponseEntity.badRequest().body(Map.of("error", "Текст сообщения не может быть пустым"));
         }
 
-
-
         try {
             String result = messageService.sendMessage(userId, platform, recipientId, text);
             return ResponseEntity.ok(Map.of("messageId", result));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
-        } catch (Exception e) {
-            return ResponseEntity.internalServerError().body(Map.of("error", "Internal error"));
         }
     }
 }

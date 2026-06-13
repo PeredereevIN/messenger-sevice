@@ -45,6 +45,7 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
     implementation 'com.fasterxml.jackson.core:jackson-databind'
 
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     // Тестирование
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }

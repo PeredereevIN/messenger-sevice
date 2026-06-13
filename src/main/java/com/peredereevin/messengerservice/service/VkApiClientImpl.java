@@ -1,6 +1,7 @@
 package com.peredereevin.messengerservice.service;
 
 import com.peredereevin.messengerservice.dto.MessageDto;
+import com.peredereevin.messengerservice.exception.InvalidTokenException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
@@ -47,9 +48,15 @@ public class VkApiClientImpl implements IMessengerClient {
         try {
             TrustManager[] trustAllCerts = new TrustManager[]{
                     new X509TrustManager() {
-                        public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
-                        public void checkClientTrusted(X509Certificate[] certs, String authType) { }
-                        public void checkServerTrusted(X509Certificate[] certs, String authType) { }
+                        public X509Certificate[] getAcceptedIssuers() {
+                            return new X509Certificate[0];
+                        }
+
+                        public void checkClientTrusted(X509Certificate[] certs, String authType) {
+                        }
+
+                        public void checkServerTrusted(X509Certificate[] certs, String authType) {
+                        }
                     }
             };
             SSLContext sc = SSLContext.getInstance("TLS");
@@ -126,11 +133,6 @@ public class VkApiClientImpl implements IMessengerClient {
     @Override
     public String sendMessage(String platformUserId, String recipientId, String text, String accessToken) {
         String token = resolveToken(accessToken);
-        // Проверяем, что recipientId передан
-        if (recipientId == null || recipientId.isBlank()) {
-            log.error("recipientId is null or empty");
-            return "Error: recipientId is required";
-        }
         try {
             String url = baseUrl + "/messages.send";
             UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(url)
@@ -139,8 +141,6 @@ public class VkApiClientImpl implements IMessengerClient {
                     .queryParam("message", text)
                     .queryParam("random_id", System.currentTimeMillis());
 
-            // Определяем, какой параметр использовать: user_id или peer_id
-            // Если ID начинается с минуса или содержит более 9 цифр — это peer_id
             if (recipientId.startsWith("-") || recipientId.length() > 9) {
                 builder.queryParam("peer_id", recipientId);
             } else {
@@ -152,12 +152,11 @@ public class VkApiClientImpl implements IMessengerClient {
 
             ResponseEntity<String> response = restTemplate.getForEntity(uri, String.class);
             JsonNode root = objectMapper.readTree(response.getBody());
-            if (root.has("error")) {
-                JsonNode error = root.get("error");
-                log.error("VK send error: {}", error);
-                return "Error: " + error.get("error_msg").asText();
-            }
-            return root.path("response").asText(); // ID сообщения
+            checkVkError(root);
+            return root.path("response").asString();
+        } catch (HttpClientErrorException e) {
+            log.error("VK send HTTP error: {}", e.getResponseBodyAsString());
+            return "Error: " + e.getStatusCode();
         } catch (Exception e) {
             log.error("Failed to send VK message", e);
             return "Error: " + e.getMessage();
@@ -171,18 +170,13 @@ public class VkApiClientImpl implements IMessengerClient {
     private List<MessageDto> executeConversationsRequest(String url, String accessToken) {
         try {
             ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
-            if (!response.getStatusCode().is2xxSuccessful()) {log.error("VK API returned status: {}", response.getStatusCode());
+            if (!response.getStatusCode().is2xxSuccessful()) {
+                log.error("VK API returned status: {}", response.getStatusCode());
                 return Collections.emptyList();
             }
 
             JsonNode root = objectMapper.readTree(response.getBody());
-            if (root.has("error")) {
-                JsonNode error = root.get("error");
-                log.error("VK API error: code={}, message={}",
-                        error.get("error_code").asText(),
-                        error.get("error_msg").asText());
-                return Collections.emptyList();
-            }
+            checkVkError(root);
 
             List<MessageDto> messages = new ArrayList<>();
             JsonNode items = root.path("response").path("items");
@@ -197,6 +191,8 @@ public class VkApiClientImpl implements IMessengerClient {
         } catch (HttpClientErrorException e) {
             log.error("VK API client error: {} {}", e.getStatusCode(), e.getResponseBodyAsString());
             return Collections.emptyList();
+        } catch (InvalidTokenException e) {
+            throw e;   // пробрасываем наверх
         } catch (Exception e) {
             log.error("Unexpected error when calling VK API", e);
             return Collections.emptyList();
@@ -212,13 +208,7 @@ public class VkApiClientImpl implements IMessengerClient {
             }
 
             JsonNode root = objectMapper.readTree(response.getBody());
-            if (root.has("error")) {
-                JsonNode error = root.get("error");
-                log.error("VK API error: code={}, message={}",
-                        error.get("error_code").asText(),
-                        error.get("error_msg").asText());
-                return Collections.emptyList();
-            }
+            checkVkError(root);
 
             List<MessageDto> messages = new ArrayList<>();
             JsonNode items = root.path("response").path("items");
@@ -231,37 +221,44 @@ public class VkApiClientImpl implements IMessengerClient {
         } catch (HttpClientErrorException e) {
             log.error("VK API client error: {} {}", e.getStatusCode(), e.getResponseBodyAsString());
             return Collections.emptyList();
+        } catch (InvalidTokenException e) {
+            throw e;
         } catch (Exception e) {
             log.error("Unexpected error when calling VK API", e);
             return Collections.emptyList();
         }
     }
 
+    private void checkVkError(JsonNode root) {
+        if (root.has("error")) {
+            JsonNode error = root.get("error");
+            int errorCode = error.get("error_code").asInt();
+            String errorMsg = error.get("error_msg").asString();
+            log.error("VK API error: code={}, message={}", errorCode, errorMsg);
+            if (errorCode == 5) {   // ошибка аутентификации
+                throw new InvalidTokenException("VK token expired or invalid");
+            }
+        }
+    }
+
     private MessageDto parseMessage(JsonNode messageNode, String accessToken) {
-        // Безопасное извлечение id
         JsonNode idNode = messageNode.get("id");
         String messageId = idNode != null ? String.valueOf(idNode.asLong()) : "0";
 
-        // Безопасное извлечение from_id
         JsonNode fromIdNode = messageNode.get("from_id");
         long fromId = fromIdNode != null ? fromIdNode.asLong() : 0L;
 
-        // Безопасное извлечение peer_id
         JsonNode peerNode = messageNode.get("peer_id");
         String conversationId = peerNode != null ? String.valueOf(peerNode.asLong()) : "0";
 
-        // Текст может отсутствовать
-        String text = messageNode.has("text") ? messageNode.get("text").asText("") : "";
-
-        // Дата
+        String text = messageNode.has("text") ? messageNode.get("text").asString("") : "";
         long timestamp = messageNode.has("date") ? messageNode.get("date").asLong() : Instant.now().getEpochSecond();
-
-        // Имя отправителя
         String senderName = getSenderName(fromId, accessToken);
 
         return MessageDto.builder()
                 .platformMessageId(messageId)
-                .conversationId(conversationId).senderId(String.valueOf(fromId))
+                .conversationId(conversationId)
+                .senderId(String.valueOf(fromId))
                 .senderName(senderName)
                 .text(text)
                 .timestamp(Instant.ofEpochSecond(timestamp))
@@ -288,8 +285,8 @@ public class VkApiClientImpl implements IMessengerClient {
                 JsonNode root = objectMapper.readTree(response.getBody());
                 JsonNode userNode = root.path("response").get(0);
                 if (userNode != null && !userNode.isMissingNode()) {
-                    String firstName = userNode.path("first_name").asText("");
-                    String lastName = userNode.path("last_name").asText("");
+                    String firstName = userNode.path("first_name").asString("");
+                    String lastName = userNode.path("last_name").asString("");
                     return (firstName + " " + lastName).trim();
                 }
             } catch (Exception e) {
@@ -310,7 +307,7 @@ public class VkApiClientImpl implements IMessengerClient {
                 JsonNode root = objectMapper.readTree(response.getBody());
                 JsonNode groupNode = root.path("response").get(0);
                 if (groupNode != null && !groupNode.isMissingNode()) {
-                    return groupNode.path("name").asText("Unknown Group");
+                    return groupNode.path("name").asString("Unknown Group");
                 }
             } catch (Exception e) {
                 log.error("Error fetching group name for id={}", -id, e);

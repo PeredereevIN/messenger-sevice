@@ -18,6 +18,13 @@ spring:
           # Адрес auth-сервиса для получения публичного ключа (JWKS)
           jwk-set-uri: http://localhost:8080/api/v1/.well-known/jwks.json
           # issuer-uri: http://auth-service:8080/api/v1
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+
+rate-limit:
+  send-interval-ms: 5000   # 5 секунд между отправками
 
 encryption:
   secret-key: ${ENCRYPTION_SECRET_KEY:lLI7zH3ymnd7Kilb827ECjdLyHnyq9y/tWOEqO/kh4k=}
