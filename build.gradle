@@ -46,6 +46,7 @@ dependencies {
     implementation 'com.fasterxml.jackson.core:jackson-databind'
 
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    implementation 'org.springframework.kafka:spring-kafka'
     // Тестирование
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }
