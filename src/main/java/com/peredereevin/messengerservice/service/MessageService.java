@@ -203,4 +203,12 @@ public class MessageService {
             tempFile.delete();
         }
     }
+
+    public String getDecryptedToken(String userId, Platform platform) {
+        UserMessengerConnection conn = connectionRepository
+                .findByUserIdAndPlatform(userId, platform)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Пользователь не подключил платформу " + platform));
+        return encryptionService.decrypt(conn.getAccessToken());
+    }
 }

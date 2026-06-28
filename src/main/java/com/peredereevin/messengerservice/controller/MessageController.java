@@ -9,6 +9,7 @@ import com.peredereevin.messengerservice.exception.InvalidTokenException;
 import com.peredereevin.messengerservice.exception.TooManyRequestsException;
 import com.peredereevin.messengerservice.exception.VkAttachmentUploadException;
 import com.peredereevin.messengerservice.service.MessageService;
+import com.peredereevin.messengerservice.service.VkApiClientImpl;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 
@@ -26,6 +28,7 @@ import java.util.Map;
 public class MessageController {
 
     private final MessageService messageService;
+    private final VkApiClientImpl vkApiClient;
 
     /**
      * Получение списка бесед для указанной платформы.
@@ -123,17 +126,17 @@ public class MessageController {
                                        @RequestParam Platform platform) {
         String userId = jwt.getSubject();
         try {
+            // Тот же токен, что и в sendMessage
+            String token = messageService.getDecryptedToken(userId, platform);
             File tempFile = File.createTempFile("upload_", "_" + file.getOriginalFilename());
             file.transferTo(tempFile);
-            DocAttachment doc = messageService.uploadDoc(userId, platform, tempFile);
+            DocAttachment doc = vkApiClient.uploadDoc(tempFile, token);
             tempFile.delete();
             return ResponseEntity.ok(doc);
-        } catch (VkAttachmentUploadException e) {
+        } catch (VkAttachmentUploadException | IOException e) {
+            //log.error("Doc upload failed", e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "Upload failed: " + e.getMessage()));
-        } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(Map.of("error", "Internal error: " + e.getMessage()));
+                    .body(Map.of("error", e.getMessage()));
         }
     }
 

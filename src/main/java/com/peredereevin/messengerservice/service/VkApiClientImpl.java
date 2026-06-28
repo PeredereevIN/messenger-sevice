@@ -125,8 +125,6 @@ public class VkApiClientImpl implements IMessengerClient {
         return sendMessageWithAttachments(platformUserId, recipientId, text, null, accessToken);
     }
 
-    // ==================== Метод с вложениями ====================
-
     public String sendMessageWithAttachments(String platformUserId, String recipientId, String text,
                                              List<Attachment> attachments, String accessToken) {
         String token = resolveToken(accessToken);
@@ -153,7 +151,7 @@ public class VkApiClientImpl implements IMessengerClient {
                 builder.queryParam("attachment", attachmentStr);
             }
 
-            URI uri = builder.build().toUri();  // параметры уже закодированы
+            URI uri = builder.build().toUri();
             log.info("Sending VK message with attachments: {}", uri);
 
             ResponseEntity<String> response = restTemplate.getForEntity(uri, String.class);
@@ -170,19 +168,27 @@ public class VkApiClientImpl implements IMessengerClient {
         }
     }
 
-    // ==================== Загрузка файлов ====================
+    // ==================== ЗАГРУЗКА ФАЙЛОВ (ПО ДОКУМЕНТАЦИИ VK) ====================
 
+    /**
+     * Загружает фото на сервер ВКонтакте.
+     * Следует документации: photos.getMessagesUploadServer → загрузка → photos.saveMessagesPhoto
+     */
     public PhotoAttachment uploadPhoto(File file, String accessToken) throws VkAttachmentUploadException {
+        log.info("Starting photo upload: {}", file.getName());
         String token = resolveToken(accessToken);
         try {
             String uploadUrl = getUploadUrl("photos.getMessagesUploadServer", token);
-            String responseJson = uploadFile(uploadUrl, file);
+            if (uploadUrl == null || uploadUrl.isBlank()) {
+                throw new VkAttachmentUploadException("Failed to get upload URL for photo");
+            }
+
+            String responseJson = uploadFileToVk(uploadUrl, file);
             JsonNode root = objectMapper.readTree(responseJson);
             String photoParam = root.path("photo").asText();
             String server = root.path("server").asText();
             String hash = root.path("hash").asText();
 
-            // Кодируем photoParam вручную
             String photoEncoded = URLEncoder.encode(photoParam, StandardCharsets.UTF_8);
             String saveUrl = String.format("%s/photos.saveMessagesPhoto?access_token=%s&v=%s&photo=%s&server=%s&hash=%s",
                     baseUrl, token, version, photoEncoded, server, hash);
@@ -200,21 +206,39 @@ public class VkApiClientImpl implements IMessengerClient {
             attachment.setHeight(savedPhoto.path("height").asInt());
             attachment.setUrl(savedPhoto.path("url").asText());
             attachment.setType("photo");
+            log.info("Photo uploaded successfully: {}_{}", attachment.getOwnerId(), attachment.getId());
             return attachment;
 
         } catch (Exception e) {
-            throw new VkAttachmentUploadException("Failed to upload photo", e);
+            log.error("Photo upload failed", e);
+            throw new VkAttachmentUploadException("Failed to upload photo: " + e.getMessage(), e);
         }
     }
 
+    /**
+     * Загружает документ на сервер ВКонтакте.
+     * Теперь с корректными заголовками и обработкой ошибок.
+     */
     public DocAttachment uploadDoc(File file, String accessToken) throws VkAttachmentUploadException {
+        log.info("Starting document upload for file: {}", file.getName());
         String token = resolveToken(accessToken);
-        try {
-            String uploadUrl = getUploadUrl("docs.getMessagesUploadServer", token);
-            String responseJson = uploadFile(uploadUrl, file);
-            JsonNode root = objectMapper.readTree(responseJson);
-            String fileParam = root.path("file").asText();
 
+        try {
+            // 1. Получаем upload_url (без peer_id — загружаем в "Мои документы")
+            String uploadUrl = getUploadUrl("docs.getMessagesUploadServer", token);
+            if (uploadUrl == null || uploadUrl.isBlank()) {
+                throw new VkAttachmentUploadException("Failed to get upload URL");
+            }
+
+            // 2. Загружаем файл с корректными заголовками
+            String uploadResponse = uploadFileToVk(uploadUrl, file);
+            JsonNode uploadResult = objectMapper.readTree(uploadResponse);
+            String fileParam = uploadResult.path("file").asText();
+            if (fileParam == null || fileParam.isBlank()) {
+                throw new VkAttachmentUploadException("Upload response missing 'file' field");
+            }
+
+            // 3. Сохраняем документ
             String fileEncoded = URLEncoder.encode(fileParam, StandardCharsets.UTF_8);
             String saveUrl = String.format("%s/docs.save?access_token=%s&v=%s&file=%s",
                     baseUrl, token, version, fileEncoded);
@@ -223,6 +247,7 @@ public class VkApiClientImpl implements IMessengerClient {
             JsonNode saveRoot = objectMapper.readTree(saveResponse.getBody());
             checkVkError(saveRoot);
 
+            log.info("docs.save full response: {}", saveResponse.getBody());
             JsonNode savedDoc = saveRoot.path("response").get(0);
             DocAttachment attachment = new DocAttachment();
             attachment.setOwnerId(savedDoc.path("owner_id").asLong());
@@ -233,13 +258,21 @@ public class VkApiClientImpl implements IMessengerClient {
             attachment.setSize(savedDoc.path("size").asInt());
             attachment.setUrl(savedDoc.path("url").asText());
             attachment.setType("doc");
+
+            log.info("Document uploaded successfully. ID: {}_{}", attachment.getOwnerId(), attachment.getId());
             return attachment;
 
         } catch (Exception e) {
-            throw new VkAttachmentUploadException("Failed to upload document", e);
+            log.error("Document upload failed", e);
+            throw new VkAttachmentUploadException("Document upload failed: " + e.getMessage(), e);
         }
     }
 
+
+    /**
+     * Получает upload_url для указанного метода VK API.
+     * Кэширует результат, чтобы не делать повторных запросов.
+     */
     private String getUploadUrl(String method, String accessToken) {
         return uploadUrlCache.computeIfAbsent(method, key -> {
             String url = String.format("%s/%s?access_token=%s&v=%s", baseUrl, method, accessToken, version);
@@ -255,18 +288,32 @@ public class VkApiClientImpl implements IMessengerClient {
         });
     }
 
-    private String uploadFile(String uploadUrl, File file) throws IOException {
+    /**
+     * Загружает файл на указанный URL (поле "file", multipart/form-data).
+     * Используется как для фото, так и для документов.
+     */
+    private String uploadFileToVk(String uploadUrl, File file) throws IOException {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+        // Важно: VK требует User-Agent
+        headers.set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36");
+        headers.set("Accept", "application/json");
 
         MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
-        body.add("file", new FileSystemResource(file));
+        body.add("file", new FileSystemResource(file) {
+            @Override
+            public String getFilename() {
+                return file.getName();
+            }
+        });
 
         HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
-        ResponseEntity<String> response = restTemplate.exchange(uploadUrl, HttpMethod.POST, requestEntity, String.class);
+        ResponseEntity<String> response = restTemplate.exchange(
+                uploadUrl, HttpMethod.POST, requestEntity, String.class);
 
         if (!response.getStatusCode().is2xxSuccessful()) {
-            throw new IOException("Upload failed with status: " + response.getStatusCode());
+            throw new IOException("Upload failed with status: " + response.getStatusCode() +
+                    ", body: " + response.getBody());
         }
         return response.getBody();
     }
@@ -362,7 +409,6 @@ public class VkApiClientImpl implements IMessengerClient {
 
         String senderName = getSenderName(fromId, accessToken);
 
-        // Парсим только фото, документы, видео
         List<Attachment> attachments = parseAttachments(messageNode.path("attachments"));
 
         boolean isOutgoing = false;
@@ -371,7 +417,6 @@ public class VkApiClientImpl implements IMessengerClient {
             isOutgoing = outNode.asInt() == 1;
         }
 
-        // Используем полное имя класса для ясности (но импорт уже есть)
         return MessageDto.builder()
                 .platformMessageId(messageId)
                 .conversationId(conversationId)
@@ -458,8 +503,6 @@ public class VkApiClientImpl implements IMessengerClient {
         video.setPlayerUrl(data.path("player").asText());
         return video;
     }
-
-    // ==================== Получение имён ====================
 
     private String getSenderName(long senderId, String accessToken) {
         if (senderId > 0) {
