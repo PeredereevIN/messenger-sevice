@@ -2,8 +2,12 @@ package com.peredereevin.messengerservice.controller;
 
 import com.peredereevin.messengerservice.domain.Platform;
 import com.peredereevin.messengerservice.dto.MessageDto;
+import com.peredereevin.messengerservice.dto.attachment.Attachment;
+import com.peredereevin.messengerservice.dto.attachment.DocAttachment;
+import com.peredereevin.messengerservice.dto.attachment.PhotoAttachment;
 import com.peredereevin.messengerservice.exception.InvalidTokenException;
 import com.peredereevin.messengerservice.exception.TooManyRequestsException;
+import com.peredereevin.messengerservice.exception.VkAttachmentUploadException;
 import com.peredereevin.messengerservice.service.MessageService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -11,7 +15,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.File;
 import java.util.List;
 import java.util.Map;
 
@@ -78,6 +84,108 @@ public class MessageController {
             return ResponseEntity.ok(Map.of("messageId", result));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Загружает фото на сервер VK и возвращает объект PhotoAttachment.
+     * POST /upload/photo?platform=VK
+     * Body: multipart/form-data с полем file
+     */
+    @PostMapping("/upload/photo")
+    public ResponseEntity<?> uploadPhoto(@AuthenticationPrincipal Jwt jwt,
+                                         @RequestParam("file") MultipartFile file,
+                                         @RequestParam Platform platform) {
+        String userId = jwt.getSubject();
+        try {
+            File tempFile = File.createTempFile("upload_", "_" + file.getOriginalFilename());
+            file.transferTo(tempFile);
+            PhotoAttachment photo = messageService.uploadPhoto(userId, platform, tempFile);
+            tempFile.delete();
+            return ResponseEntity.ok(photo);
+        } catch (VkAttachmentUploadException e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Upload failed: " + e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Internal error: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Загружает документ на сервер VK и возвращает DocAttachment.
+     * POST /upload/doc?platform=VK
+     * Body: multipart/form-data с полем file
+     */
+    @PostMapping("/upload/doc")
+    public ResponseEntity<?> uploadDoc(@AuthenticationPrincipal Jwt jwt,
+                                       @RequestParam("file") MultipartFile file,
+                                       @RequestParam Platform platform) {
+        String userId = jwt.getSubject();
+        try {
+            File tempFile = File.createTempFile("upload_", "_" + file.getOriginalFilename());
+            file.transferTo(tempFile);
+            DocAttachment doc = messageService.uploadDoc(userId, platform, tempFile);
+            tempFile.delete();
+            return ResponseEntity.ok(doc);
+        } catch (VkAttachmentUploadException e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Upload failed: " + e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Internal error: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Отправляет сообщение с уже загруженными вложениями.
+     * POST /send/with-attachments?platform=VK&recipientId=123&text=Hello
+     * Body: JSON-массив Attachment (photo/doc/video)
+     */
+    @PostMapping("/send/with-attachments")
+    public ResponseEntity<?> sendWithAttachments(@AuthenticationPrincipal Jwt jwt,
+                                                 @RequestParam Platform platform,
+                                                 @RequestParam String recipientId,
+                                                 @RequestParam(required = false) String text,
+                                                 @RequestBody List<Attachment> attachments) {
+        String userId = jwt.getSubject();
+        try {
+            String result = messageService.sendMessageWithAttachments(userId, platform, recipientId, text, attachments);
+            return ResponseEntity.ok(Map.of("messageId", result));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (TooManyRequestsException e) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Send failed: " + e.getMessage()));
+        }
+    }
+
+    /**
+     * Удобный метод: загружает файл и отправляет сообщение с ним за один вызов.
+     * POST /send/with-file?platform=VK&recipientId=123&text=Hello
+     * Body: multipart/form-data с полем file
+     */
+    @PostMapping("/send/with-file")
+    public ResponseEntity<?> sendWithFile(@AuthenticationPrincipal Jwt jwt,
+                                          @RequestParam Platform platform,
+                                          @RequestParam String recipientId,
+                                          @RequestParam(required = false) String text,
+                                          @RequestParam("file") MultipartFile file) {
+        String userId = jwt.getSubject();
+        try {
+            String result = messageService.sendMessageWithFile(userId, platform, recipientId, text, file);
+            return ResponseEntity.ok(Map.of("messageId", result));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (TooManyRequestsException e) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Send failed: " + e.getMessage()));
         }
     }
 }
